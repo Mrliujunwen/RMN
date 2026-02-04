@@ -141,31 +141,6 @@ python test_rmn.py -dataset miniimagenet -way 5 -shot 1 -gpu 0 \
 - `-max_epoch`: 训练轮数（默认: 80）
 - `-lr`: 学习率（默认: 0.1）
 - `-batch`: 批次大小（默认: 128）
-
-## 消融实验
-
-消融实验对比：
-
-1. **Base vs FixedWeight**: 验证多专家机制的有效性
-2. **FixedWeight vs SoftRouting**: 验证软路由的必要性
-3. **不同融合方式**: 对比add/adaptive/concat融合策略
-
-## 性能基准
-
-在 miniImageNet 数据集上的性能：
-
-| 模型 | 5-way 1-shot | 5-way 5-shot |
-|------|-------------|-------------|
-| RMN-Base | 66.90 | 82.10 |
-| RMN-FixedWeight | 66.85 | 82.42 |
-| **RMN-SoftRouting** | **67.10** | **82.50** |
-
-## 致谢
-
-- ResNet骨干网络基于 torchvision
-- BSC模块参考了 RENet
-- Mamba实现参考了官方 Mamba 项目
-
 ## 许可证
 
 MIT License
