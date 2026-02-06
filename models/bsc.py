@@ -10,7 +10,7 @@ import torch.nn as nn
 
 class BSC(torch.nn.Module):
     def __init__(self, kernel_sizes=[3, 3], planes=[16, 1]):
-        super(CCA, self).__init__()
+        super(BSC, self).__init__()
         num_layers = len(kernel_sizes)
         nn_modules = list()
 

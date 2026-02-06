@@ -214,23 +214,24 @@ class RMN_Base(nn.Module):
         )
         
         # ==================== CCMR分支 ====================
-        ccmr_hidden_dim = getattr(args, 'ccmr_hidden_dim', 256)
-        ccmr_d_state = getattr(args, 'ccmr_d_state', 16)
-        ccmr_n_layers = getattr(args, 'ccmr_n_layers', 2)
-        ccmr_dropout = getattr(args, 'ccmr_dropout', 0.1)
+        # 参数名使用 mamba_* 以兼容训练脚本
+        mamba_hidden_dim = getattr(args, 'mamba_hidden_dim', 256)
+        mamba_d_state = getattr(args, 'mamba_d_state', 16)
+        mamba_n_layers = getattr(args, 'mamba_n_layers', 2)
+        mamba_dropout = getattr(args, 'mamba_dropout', 0.1)
         cross_kernel = getattr(args, 'cross_kernel', 5)
         
         self.ccmr_reasoner = CrossCorrMambaReasoner(
             feature_dim=self.encoder_dim,
-            hidden_dim=ccmr_hidden_dim,
-            d_state=ccmr_d_state,
-            n_layers=ccmr_n_layers,
-            dropout=ccmr_dropout,
+            hidden_dim=mamba_hidden_dim,
+            d_state=mamba_d_state,
+            n_layers=mamba_n_layers,
+            dropout=mamba_dropout,
             kernel_size=cross_kernel,
         )
         
         self.ccmr_classifier = CrossCorrClassifier(
-            hidden_dim=ccmr_hidden_dim,
+            hidden_dim=mamba_hidden_dim,
             temperature=getattr(args, 'temperature', 0.2)
         )
         

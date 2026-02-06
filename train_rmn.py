@@ -216,9 +216,9 @@ def train_main(args):
     logger.info(f'\n[INFO] RMN 配置:')
     logger.info(f'  - 模型版本: {model_version}')
     logger.info(f'  - 融合方式: {getattr(args, "fusion_method", "concat")}')
-    logger.info(f'  - CCMR隐藏维度: {getattr(args, "ccmr_hidden_dim", 256)}')
-    logger.info(f'  - CCMR状态维度: {getattr(args, "ccmr_d_state", 16)}')
-    logger.info(f'  - CCMR层数: {getattr(args, "ccmr_n_layers", 2)}')
+    logger.info(f'  - CCMR隐藏维度: {getattr(args, "mamba_hidden_dim", 256)}')
+    logger.info(f'  - CCMR状态维度: {getattr(args, "mamba_d_state", 16)}')
+    logger.info(f'  - CCMR层数: {getattr(args, "mamba_n_layers", 2)}')
     logger.info(f'  - BSC温度: {getattr(args, "temperature_attn", 5.0)}')
     
     # FixedWeight和SoftRouting特殊参数
