@@ -8,7 +8,7 @@ RMN (Relation Mamba Network)
 3. CCMR (Cross-Correlation Mamba Reasoner): 交叉相关Mamba推理器
 
 架构:
-                              ┌─ BSC分支 (4D空间匹配) → bsc_logits ─┐
+                              ┌─ BSC分支 (交叉空间相关匹配) → bsc_logits ─┐
     图像 → ResNet → MEFS →    │                                       │ → 融合 → 分类
                               └─ CCMR分支 (序列推理) → ccmr_logits ──┘
 """
@@ -24,7 +24,7 @@ from models.ccmr import MambaRelationReasoner, RelationClassifier
 
 
 class CrossCorrelationComputation(nn.Module):
-    """计算support和query之间的交叉相关"""
+    """计算support和query之间的局部交叉相关"""
     
     def __init__(self, kernel_size=(5, 5), padding=2):
         super().__init__()
@@ -33,16 +33,6 @@ class CrossCorrelationComputation(nn.Module):
         self.unfold = nn.Unfold(kernel_size=kernel_size, padding=padding)
         
     def forward(self, support, query):
-        """
-        计算交叉相关
-        
-        Args:
-            support: 支持集特征 (way*shot, C, H, W)
-            query: 查询集特征 (num_query, C, H, W)
-        
-        Returns:
-            cross_corr: 交叉相关图 (num_query, way*shot, H*W, K*K)
-        """
         support = F.normalize(support, dim=1, p=2, eps=1e-8)
         query = F.normalize(query, dim=1, p=2, eps=1e-8)
         
@@ -50,17 +40,14 @@ class CrossCorrelationComputation(nn.Module):
         num_qry = query.shape[0]
         K = self.kernel_size[0]
         
-        # 对support展开邻域: (num_spt, C*K*K, H*W)
         support_unfold = self.unfold(support)
         support_unfold = support_unfold.view(num_spt, C, K*K, H*W)
-        support_unfold = support_unfold.permute(0, 3, 1, 2)  # (num_spt, H*W, C, K*K)
+        support_unfold = support_unfold.permute(0, 3, 1, 2)
         
-        # query展平: (num_qry, H*W, C)
         query_flat = query.view(num_qry, C, H*W).permute(0, 2, 1)
         
-        # 交叉相关: (num_qry, num_spt, H*W, K*K)
-        query_exp = query_flat.unsqueeze(1).unsqueeze(-1)  # (num_qry, 1, H*W, C, 1)
-        support_exp = support_unfold.unsqueeze(0)  # (1, num_spt, H*W, C, K*K)
+        query_exp = query_flat.unsqueeze(1).unsqueeze(-1)
+        support_exp = support_unfold.unsqueeze(0)
         cross_corr = (query_exp * support_exp).sum(dim=3)
         
         return cross_corr
@@ -84,13 +71,11 @@ class CrossCorrMambaReasoner(nn.Module):
         self.hidden_dim = hidden_dim
         self.kernel_size = kernel_size
         
-        # 交叉相关计算
         self.cross_corr = CrossCorrelationComputation(
             kernel_size=(kernel_size, kernel_size),
             padding=kernel_size // 2
         )
         
-        # 交叉相关特征投影
         corr_feat_dim = kernel_size * kernel_size
         self.corr_proj = nn.Sequential(
             nn.Linear(corr_feat_dim, hidden_dim),
@@ -98,10 +83,8 @@ class CrossCorrMambaReasoner(nn.Module):
             nn.ReLU(),
         )
         
-        # 空间位置编码
         self.spatial_pos = nn.Parameter(torch.randn(1, 1, 25, hidden_dim) * 0.02)
         
-        # Mamba层（双向）
         from models.ccmr import MambaBlock
         
         self.mamba_layers = nn.ModuleList([
@@ -116,7 +99,6 @@ class CrossCorrMambaReasoner(nn.Module):
         
         self.fusion = nn.Linear(hidden_dim * 2, hidden_dim)
         
-        # 空间聚合
         self.spatial_agg = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
@@ -130,20 +112,13 @@ class CrossCorrMambaReasoner(nn.Module):
         num_qry = query.shape[0]
         H, W = support.shape[2], support.shape[3]
         
-        # 1. 计算交叉相关
-        cross_corr = self.cross_corr(support, query)  # (num_qry, num_spt, H*W, K*K)
-        
-        # 2. 投影到hidden_dim
-        corr_feat = self.corr_proj(cross_corr)  # (num_qry, num_spt, H*W, hidden)
-        
-        # 3. 添加空间位置编码
+        cross_corr = self.cross_corr(support, query)
+        corr_feat = self.corr_proj(cross_corr)
         corr_feat = corr_feat + self.spatial_pos[:, :, :H*W, :]
         
-        # 4. 重塑为序列
         seq_len = H * W
         corr_seq = corr_feat.view(num_qry * num_spt, seq_len, -1)
         
-        # 5. 双向Mamba扫描
         x_forward = corr_seq
         for mamba_layer in self.mamba_layers:
             x_forward = mamba_layer(x_forward)
@@ -156,11 +131,9 @@ class CrossCorrMambaReasoner(nn.Module):
         x = torch.cat([x_forward, x_backward], dim=-1)
         x = self.fusion(x)
         
-        # 6. 空间聚合
         attn_weights = self.spatial_agg(x).softmax(dim=1)
         x_pooled = (x * attn_weights).sum(dim=1)
         
-        # 7. 重塑
         decision_vectors = x_pooled.view(num_qry, num_spt, -1)
         decision_vectors = self.final_norm(decision_vectors)
         
@@ -197,15 +170,11 @@ class RMN_Base(nn.Module):
         self.mode = mode
         self.args = args
         
-        # ==================== 共享骨干网络 ====================
         self.encoder = ResNet(args=args)
         self.encoder_dim = 640
         self.fc = nn.Linear(self.encoder_dim, self.args.num_class)
-        
-        # Feature enhancer (not used in Base version)
         self.feature_enhancer = None
         
-        # ==================== BSC分支 ====================
         self.bsc_module = BSC(kernel_sizes=[3, 3], planes=[16, 1])
         self.bsc_1x1 = nn.Sequential(
             nn.Conv2d(self.encoder_dim, 64, kernel_size=1, bias=False),
@@ -213,8 +182,6 @@ class RMN_Base(nn.Module):
             nn.ReLU()
         )
         
-        # ==================== CCMR分支 ====================
-        # 参数名使用 mamba_* 以兼容训练脚本
         mamba_hidden_dim = getattr(args, 'mamba_hidden_dim', 256)
         mamba_d_state = getattr(args, 'mamba_d_state', 16)
         mamba_n_layers = getattr(args, 'mamba_n_layers', 2)
@@ -235,7 +202,6 @@ class RMN_Base(nn.Module):
             temperature=getattr(args, 'temperature', 0.2)
         )
         
-        # ==================== 融合模块 ====================
         self.fusion_method = getattr(args, 'fusion_method', 'concat')
         
         if self.fusion_method == 'adaptive':
@@ -272,7 +238,6 @@ class RMN_Base(nn.Module):
     def encode(self, x, do_gap=True):
         x = self.encoder(x)
         
-        # Feature enhancement (implemented in subclasses)
         if self.feature_enhancer is not None:
             identity = x
             x, enhancer_info = self.feature_enhancer(x)
@@ -285,28 +250,27 @@ class RMN_Base(nn.Module):
             return x
     
     def bsc_forward(self, spt, qry):
-        """BSC branch forward"""
         spt = spt.squeeze(0)
         spt = self.normalize_feature(spt)
         qry = self.normalize_feature(qry)
         
-        corr4d = self.get_4d_correlation_map(spt, qry)
-        num_qry, way, H_s, W_s, H_q, W_q = corr4d.size()
+        cs_corr = self.get_cross_spatial_correlation_map(spt, qry)
+        num_qry, way, H_s, W_s, H_q, W_q = cs_corr.size()
         
-        corr4d = self.bsc_module(corr4d.view(-1, 1, H_s, W_s, H_q, W_q))
-        corr4d_s = corr4d.view(num_qry, way, H_s * W_s, H_q, W_q)
-        corr4d_q = corr4d.view(num_qry, way, H_s, W_s, H_q * W_q)
+        cs_corr = self.bsc_module(cs_corr.view(-1, 1, H_s, W_s, H_q, W_q))
+        cs_corr_s = cs_corr.view(num_qry, way, H_s * W_s, H_q, W_q)
+        cs_corr_q = cs_corr.view(num_qry, way, H_s, W_s, H_q * W_q)
         
-        corr4d_s = self.gaussian_normalize(corr4d_s, dim=2)
-        corr4d_q = self.gaussian_normalize(corr4d_q, dim=4)
+        cs_corr_s = self.gaussian_normalize(cs_corr_s, dim=2)
+        cs_corr_q = self.gaussian_normalize(cs_corr_q, dim=4)
         
-        corr4d_s = F.softmax(corr4d_s / self.args.temperature_attn, dim=2)
-        corr4d_s = corr4d_s.view(num_qry, way, H_s, W_s, H_q, W_q)
-        corr4d_q = F.softmax(corr4d_q / self.args.temperature_attn, dim=4)
-        corr4d_q = corr4d_q.view(num_qry, way, H_s, W_s, H_q, W_q)
+        cs_corr_s = F.softmax(cs_corr_s / self.args.temperature_attn, dim=2)
+        cs_corr_s = cs_corr_s.view(num_qry, way, H_s, W_s, H_q, W_q)
+        cs_corr_q = F.softmax(cs_corr_q / self.args.temperature_attn, dim=4)
+        cs_corr_q = cs_corr_q.view(num_qry, way, H_s, W_s, H_q, W_q)
         
-        attn_s = corr4d_s.sum(dim=[4, 5])
-        attn_q = corr4d_q.sum(dim=[2, 3])
+        attn_s = cs_corr_s.sum(dim=[4, 5])
+        attn_q = cs_corr_q.sum(dim=[2, 3])
         
         spt_attended = attn_s.unsqueeze(2) * spt.unsqueeze(0)
         qry_attended = attn_q.unsqueeze(2) * qry.unsqueeze(1)
@@ -330,7 +294,6 @@ class RMN_Base(nn.Module):
             return bsc_logits
     
     def ccmr_forward(self, spt, qry):
-        """CCMR branch forward"""
         spt = spt.squeeze(0)
         
         decision_vectors, class_labels = self.ccmr_reasoner(
@@ -348,30 +311,28 @@ class RMN_Base(nn.Module):
             return ccmr_logits
     
     def fusion_forward(self, spt, qry):
-        """融合BSC和CCMR的前向传播"""
         spt_orig = spt.squeeze(0)
         
-        # ========== BSC分支 ==========
         spt_bsc = self.normalize_feature(spt_orig)
         qry_bsc = self.normalize_feature(qry)
         
-        corr4d = self.get_4d_correlation_map(spt_bsc, qry_bsc)
-        num_qry, way, H_s, W_s, H_q, W_q = corr4d.size()
+        cs_corr = self.get_cross_spatial_correlation_map(spt_bsc, qry_bsc)
+        num_qry, way, H_s, W_s, H_q, W_q = cs_corr.size()
         
-        corr4d = self.bsc_module(corr4d.view(-1, 1, H_s, W_s, H_q, W_q))
-        corr4d_s = corr4d.view(num_qry, way, H_s * W_s, H_q, W_q)
-        corr4d_q = corr4d.view(num_qry, way, H_s, W_s, H_q * W_q)
+        cs_corr = self.bsc_module(cs_corr.view(-1, 1, H_s, W_s, H_q, W_q))
+        cs_corr_s = cs_corr.view(num_qry, way, H_s * W_s, H_q, W_q)
+        cs_corr_q = cs_corr.view(num_qry, way, H_s, W_s, H_q * W_q)
         
-        corr4d_s = self.gaussian_normalize(corr4d_s, dim=2)
-        corr4d_q = self.gaussian_normalize(corr4d_q, dim=4)
+        cs_corr_s = self.gaussian_normalize(cs_corr_s, dim=2)
+        cs_corr_q = self.gaussian_normalize(cs_corr_q, dim=4)
         
-        corr4d_s = F.softmax(corr4d_s / self.args.temperature_attn, dim=2)
-        corr4d_s = corr4d_s.view(num_qry, way, H_s, W_s, H_q, W_q)
-        corr4d_q = F.softmax(corr4d_q / self.args.temperature_attn, dim=4)
-        corr4d_q = corr4d_q.view(num_qry, way, H_s, W_s, H_q, W_q)
+        cs_corr_s = F.softmax(cs_corr_s / self.args.temperature_attn, dim=2)
+        cs_corr_s = cs_corr_s.view(num_qry, way, H_s, W_s, H_q, W_q)
+        cs_corr_q = F.softmax(cs_corr_q / self.args.temperature_attn, dim=4)
+        cs_corr_q = cs_corr_q.view(num_qry, way, H_s, W_s, H_q, W_q)
         
-        attn_s = corr4d_s.sum(dim=[4, 5])
-        attn_q = corr4d_q.sum(dim=[2, 3])
+        attn_s = cs_corr_s.sum(dim=[4, 5])
+        attn_q = cs_corr_q.sum(dim=[2, 3])
         
         spt_attended = attn_s.unsqueeze(2) * spt_bsc.unsqueeze(0)
         qry_attended = attn_q.unsqueeze(2) * qry_bsc.unsqueeze(1)
@@ -388,7 +349,6 @@ class RMN_Base(nn.Module):
         bsc_similarity = F.cosine_similarity(spt_attended_pooled, qry_attended_pooled, dim=-1)
         bsc_logits = bsc_similarity / self.args.temperature
         
-        # ========== CCMR分支 ==========
         decision_vectors, class_labels = self.ccmr_reasoner(
             spt_orig, qry, way=self.args.way, shot=self.args.shot
         )
@@ -396,7 +356,6 @@ class RMN_Base(nn.Module):
             decision_vectors, way=self.args.way, shot=self.args.shot
         )
         
-        # ========== 融合 ==========
         if self.fusion_method == 'adaptive':
             combined = torch.cat([bsc_logits, ccmr_logits], dim=-1)
             weights = self.fusion_weight(combined)
@@ -418,7 +377,8 @@ class RMN_Base(nn.Module):
         x_var = torch.var(x, dim=dim, keepdim=True)
         return torch.div(x - x_mean, torch.sqrt(x_var + eps))
 
-    def get_4d_correlation_map(self, spt, qry):
+    def get_cross_spatial_correlation_map(self, spt, qry):
+        """计算交叉空间相关图"""
         way = spt.shape[0]
         num_qry = qry.shape[0]
         spt = self.bsc_1x1(spt)
@@ -433,36 +393,22 @@ class RMN_Base(nn.Module):
         return x - x.mean(1).unsqueeze(1)
 
 
-# ============================================================================
-# RMN-FixedWeight: MEFS（固定权重）+ BSC + CCMR（消融实验）
-# ============================================================================
-
 class RMN_FixedWeight(RMN_Base):
     """RMN with Fixed-Weight MEFS"""
     
     def __init__(self, args, mode=None):
-        # Properly initialize parent class
         super().__init__(args, mode)
-        
-        # Override with MEFS fixed weights
         self.feature_enhancer = MEFS_FixedWeight(
             in_channels=640,
             num_experts=getattr(args, 'num_experts', 3)
         )
 
 
-# ============================================================================
-# RMN-SoftRouting: MEFS（软路由）+ BSC + CCMR（完整版）
-# ============================================================================
-
 class RMN_SoftRouting(RMN_Base):
-    """RMN with Soft-Routing MEFS (Recommended)"""
+    """RMN with Soft-Routing MEFS"""
     
     def __init__(self, args, mode=None):
-        # Properly initialize parent class
         super().__init__(args, mode)
-        
-        # Override with MEFS soft routing
         self.feature_enhancer = MEFS_SoftRouting(
             in_channels=640,
             num_experts=getattr(args, 'num_experts', 3),

@@ -1,7 +1,5 @@
 """
-BSC (Bidirectional Spatial Correspondence)
-
-Code references: https://github.com/ignacio-rocco/ncnet and https://github.com/gengshan-y/VCN
+BSC (Bidirectional Spatial Correspondence) - 双向空间对应模块
 """
 
 import torch
@@ -24,17 +22,12 @@ class BSC(torch.nn.Module):
         self.conv = nn.Sequential(*nn_modules)
 
     def forward(self, x):
-        # apply network on the input and its "transpose" (swapping A-B to B-A ordering of the correlation tensor),
-        # this second result is "transposed back" to the A-B ordering to match the first result and be able to add together
-        # because of the ReLU layers in between linear layers,
-        # this operation is different than convolving a single time with the filters+filters^T
-        # and therefore it makes sense to do this.
         x = self.conv(x) + self.conv(x.permute(0, 1, 4, 5, 2, 3)).permute(0, 1, 4, 5, 2, 3)
         return x
 
 
 class SepConv4d(nn.Module):
-    """ approximates 3 x 3 x 3 x 3 kernels via two subsequent 3 x 3 x 1 x 1 and 1 x 1 x 3 x 3 """
+    """可分离卷积: (k×k×k×k) 分解为 (k×k×1×1) + (1×1×k×k)"""
     def __init__(self, in_planes, out_planes, stride=(1, 1, 1), ksize=3, do_padding=True, bias=False):
         super(SepConv4d, self).__init__()
         self.isproj = False
