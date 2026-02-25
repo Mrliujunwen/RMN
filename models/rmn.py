@@ -64,12 +64,14 @@ class CrossCorrMambaReasoner(nn.Module):
         n_layers: int = 2,
         dropout: float = 0.1,
         kernel_size: int = 5,
+        share_mamba_weights: bool = False,
     ):
         super().__init__()
         
         self.feature_dim = feature_dim
         self.hidden_dim = hidden_dim
         self.kernel_size = kernel_size
+        self.share_mamba_weights = share_mamba_weights
         
         self.cross_corr = CrossCorrelationComputation(
             kernel_size=(kernel_size, kernel_size),
@@ -92,10 +94,13 @@ class CrossCorrMambaReasoner(nn.Module):
             for _ in range(n_layers)
         ])
         
-        self.mamba_layers_reverse = nn.ModuleList([
-            MambaBlock(d_model=hidden_dim, d_state=d_state, d_conv=4, expand=2, dropout=dropout)
-            for _ in range(n_layers)
-        ])
+        if self.share_mamba_weights:
+            self.mamba_layers_reverse = None
+        else:
+            self.mamba_layers_reverse = nn.ModuleList([
+                MambaBlock(d_model=hidden_dim, d_state=d_state, d_conv=4, expand=2, dropout=dropout)
+                for _ in range(n_layers)
+            ])
         
         self.fusion = nn.Linear(hidden_dim * 2, hidden_dim)
         
@@ -124,7 +129,8 @@ class CrossCorrMambaReasoner(nn.Module):
             x_forward = mamba_layer(x_forward)
         
         x_backward = torch.flip(corr_seq, dims=[1])
-        for mamba_layer in self.mamba_layers_reverse:
+        reverse_layers = self.mamba_layers if self.share_mamba_weights else self.mamba_layers_reverse
+        for mamba_layer in reverse_layers:
             x_backward = mamba_layer(x_backward)
         x_backward = torch.flip(x_backward, dims=[1])
         
@@ -186,6 +192,7 @@ class RMN_Base(nn.Module):
         mamba_d_state = getattr(args, 'mamba_d_state', 16)
         mamba_n_layers = getattr(args, 'mamba_n_layers', 2)
         mamba_dropout = getattr(args, 'mamba_dropout', 0.1)
+        share_mamba_weights = bool(getattr(args, 'share_mamba_weights', False))
         cross_kernel = getattr(args, 'cross_kernel', 5)
         
         self.ccmr_reasoner = CrossCorrMambaReasoner(
@@ -195,6 +202,7 @@ class RMN_Base(nn.Module):
             n_layers=mamba_n_layers,
             dropout=mamba_dropout,
             kernel_size=cross_kernel,
+            share_mamba_weights=share_mamba_weights,
         )
         
         self.ccmr_classifier = CrossCorrClassifier(
